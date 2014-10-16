@@ -1,4 +1,5 @@
 #include <iostream>
+#include <ras_utils/controller.h>
 // ROS
 #include "ros/ros.h"
 #include <geometry_msgs/Twist.h>
@@ -17,11 +18,13 @@
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/core/core.hpp>
 
-#define PUBLISH_RATE 10 // Hz
 #define QUEUE_SIZE   10
 
 #define DISTANCE_THRESHOLD_MULTIPLIER 1.25
-
+#define TARGET_DISTANCE               0.4 // [m]
+#define MIN_BLOB_SIZE           300
+#define IMG_WIDTH   640
+#define IMG_HEIGHT  480
 class Object_Detection
 {
     typedef image_transport::ImageTransport ImageTransport;
@@ -36,8 +39,6 @@ class Object_Detection
 
 public:
     Object_Detection(const ros::NodeHandle& n);
-    void run();
-
 private:
     ros::NodeHandle n_;
 
@@ -51,9 +52,14 @@ private:
 
     boost::shared_ptr<RGBD_Sync> rgbd_sync_;
 
-
+    Controller controller_v, controller_w;
+    double kp_w, kd_w, ki_w, kp_v, kd_v, ki_v;
     void RGBD_Callback(const sensor_msgs::ImageConstPtr& rgb_msg,
                        const sensor_msgs::ImageConstPtr& depth_msg);
+
+    void control(const cv::Point& mass_center,
+                 double depth,
+                 double &v, double &w);
 };
 
 // =============================================================================
@@ -68,13 +74,25 @@ int main (int argc, char* argv[])
     Object_Detection o(n);
 
     // ** Run
-    o.run();
+    ros::spin();
     return 0;
 }
 
 Object_Detection::Object_Detection(const ros::NodeHandle &n)
     : n_(n), rgb_transport_(n), depth_transport_(n)
 {
+    // ** Parameters
+    n_.getParam("Hand_tracking/W/KP", kp_w);
+    n_.getParam("Hand_tracking/W/KD", kd_w);
+    n_.getParam("Hand_tracking/W/KI", ki_w);
+
+    n_.getParam("Hand_tracking/V/KP", kp_v);
+    n_.getParam("Hand_tracking/V/KD", kd_v);
+    n_.getParam("Hand_tracking/V/KI", ki_v);
+
+    controller_w = Controller(kp_w,kd_w,ki_w);
+    controller_v = Controller(kp_v,kd_v,ki_v);
+
     // ** Publishers
     twist_pub_ = n_.advertise<geometry_msgs::Twist>("/motor_controller/twist", 1000);
 
@@ -86,32 +104,6 @@ Object_Detection::Object_Detection(const ros::NodeHandle &n)
 
     rgbd_sync_.reset(new RGBD_Sync(RGBD_Sync_Policy(QUEUE_SIZE), rgb_sub_, depth_sub_));
     rgbd_sync_->registerCallback(boost::bind(&Object_Detection::RGBD_Callback, this, _1, _2));
-
-}
-
-void Object_Detection::run()
-{
-    // ** Publish data
-    ros::Rate rate(PUBLISH_RATE); // 10 Hz
-
-    while(ros::ok())
-    {
-        // ** Create msg
-        geometry_msgs::Twist msg;
-
-        // ** Compute control commands
-//        control(msg.PWM1, msg.PWM2);
-        // TO DO: image analysis
-        msg.linear.x = 0.25;
-        msg.angular.z = 0;
-
-        // ** Publish
-        twist_pub_.publish(msg);
-
-        // ** Sleep
-        ros::spinOnce();
-        rate.sleep();
-    }
 
 }
 
@@ -162,38 +154,75 @@ void Object_Detection::RGBD_Callback(const sensor_msgs::ImageConstPtr &rgb_msg,
     cv::findContours(mask_conv,contours,CV_RETR_CCOMP, CV_CHAIN_APPROX_SIMPLE);
 
     // Keep largest one
-    double max_size = 0;
-    int idx=-1;
-    for(unsigned int i = 0; i < contours.size(); ++i)
+    if(contours.size() > 0)
     {
-        double area = cv::contourArea(contours[i]);
-        if (area > max_size)
+        double max_size = 0;
+        int idx=-1;
+        for(unsigned int i = 0; i < contours.size(); ++i)
         {
-            max_size = area;
-            idx = i;
+            double area = cv::contourArea(contours[i]);
+            if (area > max_size)
+            {
+                max_size = area;
+                idx = i;
+            }
+        }
+
+        main_contour = contours[idx];
+        final_contours.push_back(main_contour);
+
+        if (max_size < MIN_BLOB_SIZE)
+            return;
+        //FIND CENTER POINT of largest contour
+
+        cv::Moments mu = cv::moments(main_contour);
+
+
+        //Mass center
+        cv::Point2i mass_center = cv::Point2i( mu.m10/mu.m00 , mu.m01/mu.m00 );
+
+        //PRINT MASS CENTER POINTS
+        //notice there are two pair of center points because one pair is the center of the window,
+        //you can probably use the difference of the values later for P-control
+
+        //    std::cout << "Center (X,Y): "<< mc << std::endl;
+        cv::drawContours(img3,final_contours,-1,color,0);  //-1 means draw all contours, 0 means single pixel thickness
+        cv::circle(img3,mass_center,5,cv::Scalar(255,0,0),-1);
+        cv::imshow( "Contours", img3 );
+        cv::waitKey(1); //wait infinite time for a keypress
+
+        // ** Control
+        double v, w;
+        // ** Create msg
+        geometry_msgs::Twist msg;
+
+        double depth = m2.at<float>(mass_center.y, mass_center.x);
+        if(!isnan(depth))
+        {
+            std::cout << "DEPTH: "<<depth << std::endl;
+            // ** Compute control commands
+            control(mass_center, depth, v, w);
+
+            msg.linear.x = v;
+            msg.angular.z = w;
+
+            // ** Publish
+            twist_pub_.publish(msg);
         }
     }
+}
 
-    main_contour = contours[idx];
-    final_contours.push_back(main_contour);
+void Object_Detection::control(const cv::Point& mass_center,
+                               double depth,
+                               double &v, double &w)
+{
+    int deltaX = IMG_WIDTH/2.0 - mass_center.x;
 
-    //FIND CENTER POINT of largest contour
+    controller_w.setData(0, deltaX);
+    controller_v.setData(TARGET_DISTANCE, depth);
 
-    cv::Moments mu = cv::moments(main_contour);
-
-
-     //Mass center
-     cv::Point2f mc = cv::Point2f( mu.m10/mu.m00 , mu.m01/mu.m00 );
-
-    //PRINT MASS CENTER POINTS
-    //notice there are two pair of center points because one pair is the center of the window,
-    //you can probably use the difference of the values later for P-control
-
-    std::cout << "Center (X,Y): "<< mc << std::endl;
-    cv::drawContours(img3,final_contours,-1,color,0);  //-1 means draw all contours, 0 means single pixel thickness
-    cv::circle(img3,mc,5,cv::Scalar(255,0,0),-1);
-    cv::imshow( "Contours", img3 );
-    cv::waitKey(1); //wait infinite time for a keypress
-
+    w = controller_w.computeControl();
+    v = controller_v.computeControl();
+    std::cout <<"Commands (v,w): "<< v << ","<<w<<std::endl;
 }
 

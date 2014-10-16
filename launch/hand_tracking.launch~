@@ -1,0 +1,14 @@
+<launch>
+
+  <param name="Hand_tracking/W/KP" value="0.01"/>
+  <param name="Hand_tracking/W/KD" value="0.0"/>
+  <param name="Hand_tracking/W/KI" value="0.0"/>
+
+  <param name="Hand_tracking/V/KP" value="20.0"/>
+  <param name="Hand_tracking/V/KD" value="0.0"/>
+  <param name="Hand_tracking/V/KI" value="0.0"/>
+
+  <!-- Motor controller -->
+  <node pkg="hand_tracking" type="hand_tracking" name="hand_tracking" output="screen" >	
+  </node>
+</launch>

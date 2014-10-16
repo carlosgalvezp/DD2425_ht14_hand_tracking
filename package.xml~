@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <package>
-  <name>object_detection</name>
+  <name>hand_tracking</name>
   <version>0.0.0</version>
   <description>The object_detection package</description>
 
@@ -45,13 +45,14 @@
   <build_depend>std_msgs</build_depend>
   <build_depend>image_transport</build_depend>
   <build_depend>cv_bridge</build_depend>
+  <build_depend>ras_utils</build_depend>
 
   <run_depend>roscpp</run_depend>
   <run_depend>rospy</run_depend>
   <run_depend>std_msgs</run_depend>
   <run_depend>image_transport</run_depend>
   <run_depend>cv_bridge</run_depend>
-
+  <run_depend>ras_utils</run_depend>
   <!-- The export tag contains other, unspecified, tags -->
   <export>
     <!-- You can specify that this package is a metapackage here: -->

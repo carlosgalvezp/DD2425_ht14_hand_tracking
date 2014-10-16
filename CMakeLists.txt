@@ -10,6 +10,7 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   image_transport
   cv_bridge
+  ras_utils
 )
 
 ## System dependencies are found with CMake's conventions

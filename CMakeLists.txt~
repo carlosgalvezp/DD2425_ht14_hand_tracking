@@ -126,7 +126,7 @@ add_executable(${PROJECT_NAME} ${SOURCES})
 # add_dependencies(object_detection_node object_detection_generate_messages_cpp)
 
 ## Specify libraries to link a library or executable target against
-target_link_libraries(object_detection_node ${catkin_LIBRARIES} ${OpenCV_LIBRARIES})
+target_link_libraries(${PROJECT_NAME} ${catkin_LIBRARIES} ${OpenCV_LIBRARIES})
 
 
 #############
