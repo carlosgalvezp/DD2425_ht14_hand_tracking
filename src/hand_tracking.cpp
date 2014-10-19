@@ -1,4 +1,5 @@
 #include <iostream>
+#include <fstream>
 #include <ras_utils/controller.h>
 // ROS
 #include "ros/ros.h"
@@ -22,6 +23,11 @@
 
 #define DISTANCE_THRESHOLD_MULTIPLIER 1.25
 #define TARGET_DISTANCE               0.4 // [m]
+#define MAX_DEPTH                     0.7 // [m] Ignore objects further than this
+#define DISTANCE_EPSILON              0.05 // [m] Ignore objects further than this
+#define ROTATION_EPSILON              50 // [pixels] Ignore objects further than this
+
+
 #define MIN_BLOB_SIZE           300
 #define IMG_WIDTH   640
 #define IMG_HEIGHT  480
@@ -39,6 +45,7 @@ class Object_Detection
 
 public:
     Object_Detection(const ros::NodeHandle& n);
+    ~Object_Detection();
 private:
     ros::NodeHandle n_;
 
@@ -51,6 +58,8 @@ private:
     image_transport::SubscriberFilter depth_sub_;
 
     boost::shared_ptr<RGBD_Sync> rgbd_sync_;
+
+    std::fstream file;
 
     Controller controller_v, controller_w;
     double kp_w, kd_w, ki_w, kp_v, kd_v, ki_v;
@@ -90,8 +99,8 @@ Object_Detection::Object_Detection(const ros::NodeHandle &n)
     n_.getParam("Hand_tracking/V/KD", kd_v);
     n_.getParam("Hand_tracking/V/KI", ki_v);
 
-    controller_w = Controller(kp_w,kd_w,ki_w);
-    controller_v = Controller(kp_v,kd_v,ki_v);
+    controller_w = Controller(kp_w,kd_w,ki_w, 20);
+    controller_v = Controller(kp_v,kd_v,ki_v, 1);
 
     // ** Publishers
     twist_pub_ = n_.advertise<geometry_msgs::Twist>("/motor_controller/twist", 1000);
@@ -105,11 +114,20 @@ Object_Detection::Object_Detection(const ros::NodeHandle &n)
     rgbd_sync_.reset(new RGBD_Sync(RGBD_Sync_Policy(QUEUE_SIZE), rgb_sub_, depth_sub_));
     rgbd_sync_->registerCallback(boost::bind(&Object_Detection::RGBD_Callback, this, _1, _2));
 
+    //file.open("~/pid.txt");
 }
+
+Object_Detection::~Object_Detection()
+{
+    //file.close();
+}
+
 
 void Object_Detection::RGBD_Callback(const sensor_msgs::ImageConstPtr &rgb_msg,
                                      const sensor_msgs::ImageConstPtr &depth_msg)
 {
+    try
+    {
     // ** Convert ROS messages to OpenCV images
     cv_bridge::CvImageConstPtr rgb_ptr   = cv_bridge::toCvShare(rgb_msg);
     cv_bridge::CvImageConstPtr depth_ptr = cv_bridge::toCvShare(depth_msg);
@@ -192,23 +210,33 @@ void Object_Detection::RGBD_Callback(const sensor_msgs::ImageConstPtr &rgb_msg,
         cv::waitKey(1); //wait infinite time for a keypress
 
         // ** Control
-        double v, w;
-        // ** Create msg
+        double v=0, w=0;
         geometry_msgs::Twist msg;
 
         double depth = m2.at<float>(mass_center.y, mass_center.x);
-        if(!isnan(depth))
+        std::cout << "Depth: "<<depth << std::endl;
+        if(!isnan(depth) && depth < MAX_DEPTH)
         {
-            std::cout << "DEPTH: "<<depth << std::endl;
             // ** Compute control commands
             control(mass_center, depth, v, w);
-
-            msg.linear.x = v;
-            msg.angular.z = w;
-
-            // ** Publish
-            twist_pub_.publish(msg);
         }
+        msg.linear.x = v;
+        msg.angular.z = w;
+
+        // ** Publish
+        twist_pub_.publish(msg);
+
+    }
+    }catch(std::exception e){
+        ROS_ERROR("EXCEPTION IN OPENCV");
+        double v=0, w=0;
+        geometry_msgs::Twist msg;
+
+        msg.linear.x = v;
+        msg.angular.z = w;
+
+        // ** Publish
+        twist_pub_.publish(msg);
     }
 }
 
@@ -216,13 +244,19 @@ void Object_Detection::control(const cv::Point& mass_center,
                                double depth,
                                double &v, double &w)
 {
-    int deltaX = IMG_WIDTH/2.0 - mass_center.x;
-
-    controller_w.setData(0, deltaX);
-    controller_v.setData(TARGET_DISTANCE, depth);
-
-    w = controller_w.computeControl();
-    v = controller_v.computeControl();
+    int deltaX = mass_center.x - IMG_WIDTH/2.0;
+    //file << deltaX<<std::endl;
+    std::cout << "DeltaX: " << deltaX << std::endl;
+    if(abs(deltaX) > ROTATION_EPSILON)
+    {
+        controller_w.setData(0, deltaX);
+        w = controller_w.computeControl();
+    }
+    if(fabs(TARGET_DISTANCE - depth) > DISTANCE_EPSILON)
+    {
+        controller_v.setData(1.0/TARGET_DISTANCE, 1.0/depth);
+        v = controller_v.computeControl();
+    }
     std::cout <<"Commands (v,w): "<< v << ","<<w<<std::endl;
 }
 

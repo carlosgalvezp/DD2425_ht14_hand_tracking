@@ -1,0 +1,11 @@
+<launch>
+
+  <!-- Motor controller and Arduino -->
+  <include file="$(find motor_controller/launch/motor_controller.launch"/>
+	
+  <!-- RGBD camera -->
+  <include file="$(find openni2_launch)/launch/openni2.launch"/>
+
+  <!-- Hand following node -->
+  <include file="$(find hand_tracking)/launch/hand_tracking.launch"/>
+</launch>
